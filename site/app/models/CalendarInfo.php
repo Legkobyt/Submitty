@@ -72,19 +72,28 @@ class CalendarInfo extends AbstractModel {
 
         $gradeable_list = new GradeableList($core, $core->getUser(), $gradeables_of_user["gradeables"]);
 
+        // Optimized: Pre-fetch all color cookies in ONE operation
+        $color_cookies = [];
+        foreach ($courses as $course) {
+            $cookie_key = 'calendar_color_' . $course->getTitle() . $course->getTerm();
+            $color_cookies[$course->getTerm() . $course->getTitle()] = $_COOKIE[$cookie_key] ?? null;
+        }
+
         $i = 1;
         /** @var Course $course */
         foreach ($courses as $course) {
-            if (isset($_COOKIE['calendar_color_' . $course->getTitle() . $course->getTerm()])) { //Check if color cookie exists
-                $info->colors[$course->getTerm() . $course->getTitle()] = $_COOKIE['calendar_color_' . $course->getTitle() . $course->getTerm()];
+            $course_key = $course->getTerm() . $course->getTitle();
+            
+            if ($color_cookies[$course_key] !== null) {
+                // Use cached cookie value
+                $info->colors[$course_key] = $color_cookies[$course_key];
             }
-            else { //Cookie not set, generate one as default
-                $info->colors[$course->getTerm() . $course->getTitle()] = "var(--category-color-$i)";
-                setcookie('calendar_color_' . $course->getTitle() . $course->getTerm(), "var(--category-color-$i)", time() + 3600);
-                $i = $i + 1;
-                if ($i > 8) {
-                    $i = 1;
-                }
+            else {
+                // Generate new color and set cookie
+                $color = "var(--category-color-$i)";
+                $info->colors[$course_key] = $color;
+                setcookie('calendar_color_' . $course->getTitle() . $course->getTerm(), $color, time() + 86400);
+                $i = ($i % 8) + 1; // Cycle through 8 colors
             }
         }
 
