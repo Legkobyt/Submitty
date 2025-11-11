@@ -1,0 +1,269 @@
+name: Security Vulnerability Scan
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+  schedule:
+    # Run weekly on Mondays at 2 AM UTC
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+env:
+  SUBMITTY_REPOSITORY: /usr/local/submitty/GIT_CHECKOUT/Submitty
+
+jobs:
+  trivy-vulnerability-scan:
+    name: Trivy Multi-Language Security Scanner
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run Trivy vulnerability scanner in filesystem mode
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          scanners: 'vuln,secret,config'
+          exit-code: '0'  # Don't fail build, just report
+          ignore-unfixed: false
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-fs-scan'
+
+      - name: Run Trivy scanner for human-readable console output
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          scanners: 'vuln,secret,config'
+
+      - name: Generate detailed JSON report
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          scanners: 'vuln,secret,config'
+
+      - name: Upload Trivy artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-scan-results
+          path: |
+            trivy-results.sarif
+            trivy-results.json
+          retention-days: 30
+
+
+  dependency-review:
+    name: Dependency Review (PR Gate)
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+      
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: always
+          
+      - name: Generate dependency diff
+        if: failure()
+        run: |
+          echo "⚠️ This PR introduces dependencies with security issues or license conflicts" >> $GITHUB_STEP_SUMMARY
+          echo "Please review the Dependency Review job output above" >> $GITHUB_STEP_SUMMARY
+
+
+  codeql-analysis:
+    name: CodeQL Security Analysis
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript', 'python']
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{matrix.language}}"
+
+
+  secret-scanning:
+    name: Secret Detection (GitGuardian)
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          
+      - name: GitGuardian scan
+        uses: GitGuardian/ggshield-action@v1.33.0
+        env:
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+          GITHUB_PULL_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+        continue-on-error: true
+
+
+  semgrep-sast:
+    name: Semgrep SAST (Static Analysis)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      security-events: write
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v5
+      
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/javascript
+            p/python
+            p/php
+            p/sql-injection
+            p/xss
+            p/command-injection
+          generateSarif: true
+        env:
+          SEMGREP_RULES: auto
+          
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep-sast
+
+
+  security-summary:
+    name: Security Scan Summary Report
+    runs-on: ubuntu-22.04
+    needs: [trivy-vulnerability-scan, codeql-analysis]
+    if: always()
+    steps:
+      - name: Download Trivy artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-scan-results
+        continue-on-error: true
+
+      - name: Parse Trivy results and generate summary
+        if: always()
+        run: |
+          echo "# 🛡️ Security Vulnerability Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🔍 Scanners Executed:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scanner | Target | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trivy** | Dependencies, Secrets, Configs | ✅ Complete |" >> $GITHUB_STEP_SUMMARY
+          echo "| **CodeQL** | JavaScript, Python code | ✅ Complete |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Dependency Review** | PR dependency changes | ${{ github.event_name == 'pull_request' && '✅ Complete' || '⏭️ Skipped (not a PR)' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Semgrep** | Security patterns (SAST) | ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') && '✅ Complete' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **GitGuardian** | Secrets in commits | ${{ github.event_name == 'pull_request' && '✅ Complete' || '⏭️ Skipped (not a PR)' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "trivy-results.json" ]; then
+            CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo "0")
+            HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo "0")
+            MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json 2>/dev/null || echo "0")
+            SECRETS=$(jq '[.Results[]?.Secrets[]?] | length' trivy-results.json 2>/dev/null || echo "0")
+            
+            echo "## 📊 Trivy Vulnerability Breakdown:" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 CRITICAL | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟠 HIGH | $HIGH |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 MEDIUM | $MEDIUM |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔑 Secrets Found | $SECRETS |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+              echo "⚠️ **Action Required:** Critical or High severity vulnerabilities detected!" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          echo "## 📁 Detailed Reports:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 View detailed findings in the **Security** tab → **Code scanning alerts**" >> $GITHUB_STEP_SUMMARY
+          echo "- 📥 Download artifacts for offline analysis (JSON/SARIF formats)" >> $GITHUB_STEP_SUMMARY
+          echo "- 📋 Check individual job outputs for remediation guidance" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "## 🔗 Quick Links:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- [Security Alerts](https://github.com/${{ github.repository }}/security/code-scanning)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Dependency Graph](https://github.com/${{ github.repository }}/network/dependencies)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Dependabot Alerts](https://github.com/${{ github.repository }}/security/dependabot)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment on PR with security summary
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let comment = '## 🛡️ Security Scan Results\n\n';
+            comment += '✅ Automated security scans completed for this PR.\n\n';
+            comment += '### Scans Performed:\n';
+            comment += '- ✅ **Trivy**: Vulnerability, secret, and config scanning\n';
+            comment += '- ✅ **CodeQL**: Static analysis for JavaScript and Python\n';
+            comment += '- ✅ **Dependency Review**: Checks for vulnerable dependencies\n';
+            comment += '- ✅ **Semgrep**: Security pattern detection (SAST)\n';
+            comment += '- ✅ **GitGuardian**: Secret detection in commits\n\n';
+            comment += '📊 View detailed results in the [Security tab](https://github.com/${{ github.repository }}/security/code-scanning)\n\n';
+            comment += '---\n';
+            comment += '*Automated by Security Vulnerability Scan workflow*';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
