@@ -1,40 +1,57 @@
 {% import _self as self %}
 
-<script>
-    const gradeables_by_date = {{ gradeables_by_date|json_encode|raw }};
-    const curr_year = {{ curr_year }};
-    const curr_month = {{ curr_month }};
-    const curr_day = {{ curr_day }};
-    const instructor_courses = {{ instructor_courses|json_encode|raw }};
-    const global_items_by_date = {{global_items_by_date|json_encode|raw }};
-    const is_superuser = {{ is_superuser ? "true" : "false" }};
+{# Begin Calendar - JSON data stored in data attributes to avoid render-blocking #}
+<div id="calendar-data" 
+     data-gradeables="{{ gradeables_by_date|json_encode|e('html_attr') }}"
+     data-curr-year="{{ curr_year }}"
+     data-curr-month="{{ curr_month }}"
+     data-curr-day="{{ curr_day }}"
+     data-instructor-courses="{{ instructor_courses|json_encode|e('html_attr') }}"
+     data-global-items="{{ global_items_by_date|json_encode|e('html_attr') }}"
+     data-is-superuser="{{ is_superuser ? 'true' : 'false' }}"
+     data-show-legend="{{ show_legend }}"
+     style="display:none;">
+</div>
 
-    $( document ).ready(function() {
-        // Get value of the type dropdown
-        const type = $("#calendar-item-type-edit").val();
-        // Get cookie for curr the viewed day, month, and year
-        cookie_year = parseInt(Cookies.get('calendar_year'));
-        cookie_month = parseInt(Cookies.get('calendar_month'));
-        cookie_day = parseInt(Cookies.get('calendar_day'));
-        if (isNaN(cookie_year)) {
-            cookie_year = curr_year;
-        }
-        if (isNaN(cookie_month)) {
-            cookie_month = curr_month;
-        }
-        if (isNaN(cookie_day)) {
-            cookie_day = curr_day;
-        }
-        // Load the calendar to the correct day
-        loadCalendar(cookie_month, cookie_year, cookie_day, type);
-        //Color the legend
-        if ({{show_legend}} === 1) {
-            colorLegend();
+<script>
+    // Initialize calendar after DOM is ready (non-blocking)
+    document.addEventListener('DOMContentLoaded', function() {
+        // Parse data from data attributes
+        const calendarData = document.getElementById('calendar-data');
+        window.gradeables_by_date = JSON.parse(calendarData.dataset.gradeables);
+        window.curr_year = parseInt(calendarData.dataset.currYear);
+        window.curr_month = parseInt(calendarData.dataset.currMonth);
+        window.curr_day = parseInt(calendarData.dataset.currDay);
+        window.instructor_courses = JSON.parse(calendarData.dataset.instructorCourses);
+        window.global_items_by_date = JSON.parse(calendarData.dataset.globalItems);
+        window.is_superuser = calendarData.dataset.isSuperuser === 'true';
+        
+        // Wait for jQuery to be available
+        const initCalendar = function() {
+            const type = $("#calendar-item-type-edit").val();
+            let cookie_year = parseInt(Cookies.get('calendar_year'));
+            let cookie_month = parseInt(Cookies.get('calendar_month'));
+            let cookie_day = parseInt(Cookies.get('calendar_day'));
+            
+            if (isNaN(cookie_year)) cookie_year = curr_year;
+            if (isNaN(cookie_month)) cookie_month = curr_month;
+            if (isNaN(cookie_day)) cookie_day = curr_day;
+            
+            loadCalendar(cookie_month, cookie_year, cookie_day, type);
+            
+            if (parseInt(calendarData.dataset.showLegend) === 1) {
+                colorLegend();
+            }
+        };
+        
+        if (typeof $ !== 'undefined') {
+            $(document).ready(initCalendar);
+        } else {
+            // jQuery not loaded yet, wait for it
+            window.addEventListener('load', initCalendar);
         }
     });
 </script>
-
-{# Begin Calendar #}
 <div class="content">
     <h1>Calendar</h1>
     <div class="cal-content">

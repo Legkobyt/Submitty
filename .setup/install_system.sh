@@ -505,7 +505,7 @@ if [ ${WORKER} == 0 ]; then
 xdebug.start_with_request=trigger
 xdebug.client_port=9003
 xdebug.discover_client_host=true
-xdebug.mode=debug
+xdebug.mode=coverage
 EOF
         fi
 

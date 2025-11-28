@@ -37,45 +37,35 @@ class CalendarController extends AbstractController {
         $calendar_messages = [];
         $global_calendar_messages = [];
         $courses = $this->core->getQueries()->getCourseForUserId($user->getId());
+        
+        // Optimized course filtering - single pass, minimal cookie operations
         $filtered_courses = [];
-
-        //If there aren't any courses, don't filter
-        if (count($courses) != 0) {
-            //Check if should see all courses
-            $show_all_courses = '1';
-            if (isset($_COOKIE['calendar_show_all'])) { //Check if show_all cookie exists
-                $show_all_courses = $_COOKIE['calendar_show_all'];
-            }
-            else { //No cookie, create cookie
+        if (!empty($courses)) {
+            $show_all_courses = $_COOKIE['calendar_show_all'] ?? '1';
+            
+            // Set cookie only if not already set
+            if (!isset($_COOKIE['calendar_show_all'])) {
                 setcookie('calendar_show_all', '1', time() + (10 * 365 * 24 * 60 * 60));
-                $show_all_courses = '1';
             }
 
             if ($show_all_courses === '1') {
                 $filtered_courses = $courses;
             }
             else {
-                //If can't see all courses, see specific course
-                if (isset($_COOKIE['calendar_course'])) { //if cookie exists, find matching course
-                    $found_course = false;
-                    foreach ($courses as $course) {
-                        $course_string = sprintf("%s %s", $course->getTitle(), $course->getTerm());
-                        if ($course_string === $_COOKIE['calendar_course']) {
-                            $found_course = true;
-                            array_push($filtered_courses, $course);
-                            break;
-                        }
-                    }
-                    if (!$found_course) { //If can't find course, default to first course
-                        $course_cookie_value = sprintf("%s %s", $courses[0]->getTitle(), $courses[0]->getTerm());
-                        setcookie('calendar_course', $course_cookie_value, time() + (10 * 365 * 24 * 60 * 60));
-                        array_push($filtered_courses, $courses[0]);
-                    }
+                // Filter to specific course - optimized with array_filter
+                $selected_course = $_COOKIE['calendar_course'] ?? null;
+                
+                if ($selected_course !== null) {
+                    $filtered_courses = array_filter($courses, function($course) use ($selected_course) {
+                        return sprintf("%s %s", $course->getTitle(), $course->getTerm()) === $selected_course;
+                    });
                 }
-                else { //if cookie doesn't exist, choose first course
+                
+                // Default to first course if no match found or no cookie
+                if (empty($filtered_courses)) {
+                    $filtered_courses = [$courses[0]];
                     $course_cookie_value = sprintf("%s %s", $courses[0]->getTitle(), $courses[0]->getTerm());
                     setcookie('calendar_course', $course_cookie_value, time() + (10 * 365 * 24 * 60 * 60));
-                    array_push($filtered_courses, $courses[0]);
                 }
             }
         }

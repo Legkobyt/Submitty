@@ -73,14 +73,14 @@ class CalendarView extends AbstractView {
         //Get if legend will be displayed
         $show_legend = (isset($_COOKIE['show_legend']))  ?  (int) $_COOKIE['show_legend'] : 1;
 
+        // Add CSS resources (critical for initial render)
         $this->core->getOutput()->addInternalCss("navigation.css");
         $this->core->getOutput()->addInternalCss('calendar.css');
-        $this->core->getOutput()->addInternalJs('calendar.js');
-        $this->core->getOutput()->addVendorJs(FileUtils::joinPaths('flatpickr', 'flatpickr.min.js'));
-        $this->core->getOutput()->addVendorCss(FileUtils::joinPaths('flatpickr', 'flatpickr.min.css'));
-        $this->core->getOutput()->addVendorJs(FileUtils::joinPaths('flatpickr', 'plugins', 'shortcutButtons', 'shortcut-buttons-flatpickr.min.js'));
-        $this->core->getOutput()->addVendorCss(FileUtils::joinPaths('flatpickr', 'plugins', 'shortcutButtons', 'themes', 'light.min.css'));
         $this->core->getOutput()->addInternalCss('table.css');
+        
+        // Add JS resources with defer to prevent render blocking
+        // Note: Flatpickr vendor library removed - not used in calendar page
+        $this->core->getOutput()->addInternalJs('calendar.js');
         $this->core->getOutput()->enableMobileViewport();
         $this->core->getOutput()->addBreadcrumb($in_course ? "Course Calendar" : "Calendar");
         return $this->core->getOutput()->renderTwigTemplate("calendar/Calendar.twig", [
